@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Notia</string>
+    <string name="notes_list_title">Notlarım</string>
+    <string name="editor_title">Düzenleyici</string>
+    <string name="timer_title">Zamanlayıcı</string>
+    <string name="settings_title">Ayarlar</string>
+    <string name="create_note">Yeni Not</string>
+    <string name="back">Geri</string>
+</resources>
