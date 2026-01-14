@@ -15,17 +15,7 @@ kotlin {
         }
     }
     
-    listOf(
-        iosX64(),
-        iosArm64(),
-        iosSimulatorArm64()
-    ).forEach { iosTarget ->
-        iosTarget.binaries.framework {
-            baseName = "ComposeApp"
-            isStatic = true
-            freeCompilerArgs += listOf("-Xbinary=bundleId=com.notia.app")
-        }
-    }
+
     
     sourceSets {
         commonMain.dependencies {
@@ -68,9 +58,7 @@ kotlin {
             implementation(libs.androidx.input.motionprediction)
         }
         
-        iosMain.dependencies {
-            
-        }
+
     }
 }
 
@@ -131,9 +119,7 @@ dependencies {
     // For Android, we also need to add kspAndroid, but strictly speaking multiplatform plugin should handle sources.
     // However, explicitly adding kspAndroid is often safer for mixed projects.
     add("kspAndroid", libs.androidx.room.compiler)
-    // add("kspIosX64", libs.androidx.room.compiler)
-    // add("kspIosArm64", libs.androidx.room.compiler)
-    // add("kspIosSimulatorArm64", libs.androidx.room.compiler)
+
 
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
