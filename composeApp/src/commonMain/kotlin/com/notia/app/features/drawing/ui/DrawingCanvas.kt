@@ -8,5 +8,7 @@ import androidx.compose.ui.graphics.Color
 expect fun DrawingCanvas(
     currentColor: Color = Color.Black,
     currentWidth: Float = 5f,
+    scale: Float = 1f,
+    offset: androidx.compose.ui.geometry.Offset = androidx.compose.ui.geometry.Offset.Zero,
     modifier: Modifier = Modifier
 )

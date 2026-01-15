@@ -16,6 +16,8 @@ actual fun DrawingView(
     DrawingCanvas(
         currentColor = androidx.compose.ui.graphics.Color(toolConfig.color),
         currentWidth = toolConfig.strokeWidth,
+        scale = 1f,
+        offset = androidx.compose.ui.geometry.Offset.Zero,
         modifier = modifier
     )
 }

@@ -67,18 +67,47 @@ class DrawingEngine(context: Context) : FrameLayout(context) {
     fun setOnStrokeCreatedListener(listener: (Stroke) -> Unit) {
         onStrokeCreatedListener = listener
     }
+
+    data class DebugPointInfo(val x: Float, val y: Float, val velocity: Float, val isAccepted: Boolean)
+
+    fun setDebugListener(listener: (String, List<DebugPointInfo>) -> Unit) {
+        author.setDebugListener { stats, points ->
+            val mapped = points.map { 
+                DebugPointInfo(it.x, it.y, it.velocity, it.type.name == "ACCEPTED")
+            }
+            listener(stats, mapped)
+        }
+    }
     
-    fun updateBrush(brush: Brush) {
-        author.updateBrush(brush)
+    fun updateTool(brush: Brush, isEraser: Boolean = false) {
+        author.updateTool(brush, isEraser)
     }
     
     fun setStrokes(strokes: List<Stroke>) {
         renderer.setStrokes(strokes)
     }
 
-    // Forward touch events to Author
+    // State for Touch Logic
+    private var isStylusOnlyMode = false
+    
+    fun setStylusOnlyMode(enabled: Boolean) {
+        isStylusOnlyMode = enabled
+    }
+
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        // Give author first dibs
+        // STYLUS ONLY MODE LOGIC
+        if (isStylusOnlyMode) {
+            val toolType = ev.getToolType(0)
+            val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
+            
+            if (!isStylus) {
+                // If it's a finger (and we are in stylus only mode), ignore it here.
+                // Returning false lets the parent (Compose Box) handle it (Pan/Zoom).
+                return false
+            }
+        }
+        
+        // Give author first dibs (Drawing)
         val consumed = author.handleTouchEvent(ev)
         if (consumed) return true
         

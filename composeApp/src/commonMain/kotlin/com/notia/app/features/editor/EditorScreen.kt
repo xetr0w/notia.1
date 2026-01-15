@@ -14,6 +14,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import com.notia.app.features.editor.components.EditorBottomBar
 import com.notia.app.features.editor.components.EditorTopBar
 import com.notia.app.ui.theme.PaperBackground
@@ -26,19 +33,37 @@ fun EditorScreen(
 ) {
     Scaffold(
         containerColor = PaperBackground,
-        topBar = {
-             EditorTopBar(onBackClick = onNavigateBack)
-        }
+        // topBar = { EditorTopBar(...) } REMOVED for clean Drawing UI
     ) { paddingValues ->
+        // Zoom/Pan State
+        var scale by remember { mutableStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                // Capture Gestures for BOTH Background and Drawing
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(0.5f, 3f)
+                        offset += pan
+                    }
+                }
         ) {
-            // 1. Paper Lines Background (Draw manually for infinite scalability)
-            Canvas(modifier = Modifier.fillMaxSize()) {
+            // 1. Paper Lines Background
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    }
+            ) {
                 val lineHeight = 40.dp.toPx()
-                val lineCount = (size.height / lineHeight).toInt()
+                val lineCount = (size.height / lineHeight).toInt() // Note: This might need adjustment if infinite scrolling is desired
                 
                 for (i in 1..lineCount) {
                     val y = i * lineHeight
@@ -49,14 +74,6 @@ fun EditorScreen(
                         strokeWidth = 1.dp.toPx()
                     )
                 }
-                
-                // Optional: Vertical Margin Line (Red/Pink) like real paper
-                // drawLine(
-                //    color = Color(0xFFFFCDD2),
-                //    start = Offset(60.dp.toPx(), 0f),
-                //    end = Offset(60.dp.toPx(), size.height),
-                //    strokeWidth = 1.dp.toPx()
-                // )
             }
 
             // 2. Content Layer (Drawing Engine)
@@ -64,19 +81,13 @@ fun EditorScreen(
              Box(modifier = Modifier.fillMaxSize()) {
                  com.notia.app.features.drawing.ui.DrawingCanvas(
                      currentColor = com.notia.app.ui.theme.AccentBlack,
-                     currentWidth = with(density) { 3.dp.toPx() } // Correct density usage
+                     currentWidth = with(density) { 3.dp.toPx() },
+                     scale = scale,
+                     offset = offset
                  )
              }
              
-             // 3. Bottom Toolbar Overlay
-             Box(
-                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth(),
-                 contentAlignment = Alignment.Center
-             ) {
-                 EditorBottomBar()
-             }
+             // 3. Bottom Toolbar Overlay REMOVED
         }
     }
 }
