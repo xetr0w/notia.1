@@ -69,6 +69,30 @@ class InkStrokeAuthor(context: Context) : FrameLayout(context) {
     private var currentBrush: Brush = createDefaultBrush()
     private var currentStrokeId: InProgressStrokeId? = null
 
+    // Smoothing State
+    private var smoothX = 0f
+    private var smoothY = 0f
+    private var smoothP = 0f
+    private var isFirstPoint = true
+
+    // Tuning Factors (0.0 = infinite lag, 1.0 = raw input)
+    private val COORD_ALPHA = 0.65f // Smooths out the "jagged" edges
+    private val PRESSURE_ALPHA = 0.45f // Fixes the "bumpy" line thickness
+
+    private fun applySmoothing(rawX: Float, rawY: Float, rawPressure: Float) {
+        if (isFirstPoint) {
+            smoothX = rawX
+            smoothY = rawY
+            smoothP = rawPressure
+            isFirstPoint = false
+        } else {
+            // Exponential Moving Average (EMA)
+            smoothX = (smoothX * (1 - COORD_ALPHA)) + (rawX * COORD_ALPHA)
+            smoothY = (smoothY * (1 - COORD_ALPHA)) + (rawY * COORD_ALPHA)
+            smoothP = (smoothP * (1 - PRESSURE_ALPHA)) + (rawPressure * PRESSURE_ALPHA)
+        }
+    }
+
     init {
         // Calculate px threshold
         val density = context.resources.displayMetrics.density
@@ -127,8 +151,101 @@ class InkStrokeAuthor(context: Context) : FrameLayout(context) {
             family = brushFamily,
             colorIntArgb = colorInt,
             size = size,
-            epsilon = 0.01f
+            epsilon = 0.05f
         )
+    }
+
+    // Extracted Filter Logic (Task 8: Dynamic Velocity Threshold)
+    private fun tryAcceptPoint(x: Float, y: Float, eventTime: Long, pressure: Float): Boolean {
+        val dt = eventTime - lastAcceptedTime
+        val dx = x - lastAcceptedX
+        val dy = y - lastAcceptedY
+        val distPx = kotlin.math.hypot(dx, dy)
+        
+        // Convert to DP for consistent logic across screens
+        val density = context.resources.displayMetrics.density
+        val distDp = distPx / density
+        
+        // 1. Calculate Velocity (dp/sec)
+        // Avoid division by zero
+        val velocityDpSec = if (dt > 0) (distDp / dt) * 1000f else 0f
+        
+        // 2. Dynamic Threshold Logic
+        // SLOW writing (< 150 dp/s) needs ZERO BLOCKING (0.0001f) to feel "liquid".
+        // FAST writing (> 800 dp/s) needs STRONG STABILIZATION (1.5f).
+        val minThresholdDp = when {
+            velocityDpSec < 150f -> 0.0001f // Virtually zero. Captures every micro-movement.
+            velocityDpSec > 800f -> 1.5f    // Stronger stabilization for fast strokes.
+            else -> {
+                // Linear Interpolation
+                val t = (velocityDpSec - 150f) / (800f - 150f)
+                0.0001f + t * (1.5f - 0.0001f)
+            }
+        }
+        
+        val minThresholdPx = minThresholdDp * density
+        
+        var accept = false
+        
+        // Rule A: Distance Check (Dynamic)
+        if (distPx >= minThresholdPx) {
+            accept = true
+        }
+        
+        // Rule B: Corner Preservation (Keep existing logic, but guard against noise)
+        // Only verify corners if we have moved at least a tiny bit (e.g. 0.1dp) to avoid noise 
+        if (!accept && acceptedPointCount > 1 && dt > minTimeThresholdMs && distPx > (0.1f * density)) {
+             val v1x = lastAcceptedX - prevAcceptedX
+             val v1y = lastAcceptedY - prevAcceptedY
+             val v2x = dx
+             val v2y = dy
+             
+             val dot = v1x * v2x + v1y * v2y
+             val mag1 = kotlin.math.hypot(v1x, v1y)
+             val mag2 = distPx
+             
+             if (mag1 > 0 && mag2 > 0) {
+                 val cosTheta = dot / (mag1 * mag2)
+                 val clampedCos = cosTheta.coerceIn(-1.0f, 1.0f)
+                 val angleRad = kotlin.math.acos(clampedCos)
+                 val angleDeg = Math.toDegrees(angleRad.toDouble())
+                 
+                 // Task 6 Algorithm: Dynamic Angle Threshold (Still using <80 logic for angles)
+                 val angleThreshold = if (velocityDpSec < 80f) 45.0 else 30.0
+                 
+                 if (kotlin.math.abs(angleDeg) > angleThreshold) {
+                     accept = true
+                 }
+             }
+        }
+        
+        // Rule C: Pressure Preservation
+        if (!accept && dt > minTimeThresholdMs) {
+            if (kotlin.math.abs(pressure - lastAcceptedPressure) > 0.03f) {
+                accept = true
+            }
+        }
+
+        if (accept) {
+            // Update Internal State
+            prevAcceptedX = lastAcceptedX
+            prevAcceptedY = lastAcceptedY
+            
+            lastAcceptedX = x
+            lastAcceptedY = y
+            lastAcceptedTime = eventTime
+            lastAcceptedPressure = pressure
+            
+            // Stats & Debug
+            totalAcceptedDistance += distPx
+            acceptedPointCount++
+            debugPoints.add(DebugPoint(x, y, velocityDpSec, PointType.ACCEPTED))
+            
+            return true
+        } else {
+             // Optional: Debug rejected?
+             return false
+        }
     }
 
     /**
@@ -227,6 +344,7 @@ class InkStrokeAuthor(context: Context) : FrameLayout(context) {
                         Matrix()
                     )
                     // Reset filter state
+                    isFirstPoint = true // Reset smoothing
                     lastAcceptedX = event.x
                     lastAcceptedY = event.y
                     lastAcceptedTime = event.eventTime
@@ -251,99 +369,48 @@ class InkStrokeAuthor(context: Context) : FrameLayout(context) {
             }
             MotionEvent.ACTION_MOVE -> {
                 val id = currentStrokeId ?: return false
+                val pointerIndex = event.findPointerIndex(pointerId)
                 
-                // Prediction Playback (Unchanged - Prediction needs unfiltered stream usually, but let's test)
-                // Actually, predictor.record() handles the raw stream above.
-                     // Prediction removed to enforce "Accepted Point Invariant"
-                     // We process raw events strictly through the filter.
-                     
-                     try {
-                         // INPUT FILTER LOGIC
-                         val currentX = event.x
-                         val currentY = event.y
-                         val currentTime = event.eventTime
-                         val currentPressure = event.pressure
-    
-                         val dt = currentTime - lastAcceptedTime
-                         
-                         val dx = currentX - lastAcceptedX
-                         val dy = currentY - lastAcceptedY
-                         val dist = kotlin.math.hypot(dx, dy)
-                         
-                         var accept = false
-                         
-                         // 1. Standard Distance Threshold (1.2dp)
-                     // Task 3: REMOVED time-based acceptance here to prevent oversampling on slow strokes.
-                     // Distance is now the primary driver.
-                     // Task 5 Tuning: Adjusted to 1.0dp (Sweet spot) per user feedback.
-                     val minDistanceDp = 1.0f
-                     val minDistancePx = minDistanceDp * context.resources.displayMetrics.density
+                try {
+                    var anyPointAccepted = false
+                    
+                    if (pointerIndex != -1) {
+                        // A) Process History First (To fill the gaps in fast curves)
+                        val historySize = event.historySize
+                        for (h in 0 until historySize) {
+                            val hx = event.getHistoricalX(pointerIndex, h)
+                            val hy = event.getHistoricalY(pointerIndex, h)
+                            val ht = event.getHistoricalEventTime(h)
+                            val hp = event.getHistoricalPressure(pointerIndex, h)
+                            
+                            applySmoothing(hx, hy, hp)
 
-                     if (dist > minDistancePx) {
-                         accept = true
-                     }
-                     
-                     // 2. Corner Preservation
-                     // Task 3: Gate with time check
-                     if (!accept && acceptedPointCount > 1 && dt > minTimeThresholdMs) {
-                         val v1x = lastAcceptedX - prevAcceptedX
-                         val v1y = lastAcceptedY - prevAcceptedY
-                         val v2x = dx
-                         val v2y = dy
-                         
-                         val dot = v1x * v2x + v1y * v2y
-                         val mag1 = kotlin.math.hypot(v1x, v1y)
-                         val mag2 = dist
-                         
-                         if (mag1 > 0 && mag2 > 0) {
-                             val cosTheta = dot / (mag1 * mag2)
-                             val clampedCos = cosTheta.coerceIn(-1.0f, 1.0f)
-                             val angleRad = kotlin.math.acos(clampedCos)
-                             val angleDeg = Math.toDegrees(angleRad.toDouble())
-                             
-                             // Task 6 Algorithm: Dynamic Angle Threshold
-                             // Low Velocity (< 80 dp/s) -> 45 degrees (Filter tremors in slow writing)
-                             // Normal/Fast (> 80 dp/s) -> 30 degrees (Preserve sharpness)
-                             val candidateDistDp = dist / context.resources.displayMetrics.density
-                             val velocityDpSec = if (dt > 0) (candidateDistDp / dt) * 1000f else 0f
-                             
-                             val angleThreshold = if (velocityDpSec < 80f) 45.0 else 30.0
-                             
-                             if (kotlin.math.abs(angleDeg) > angleThreshold) {
-                                 accept = true
-                             }
-                         }
-                     }
-                     
-                     // 3. Pressure Preservation
-                     // Task 3: Gate with time check
-                     if (!accept && dt > minTimeThresholdMs) {
-                         if (kotlin.math.abs(currentPressure - lastAcceptedPressure) > 0.03f) {
-                             accept = true
-                         }
-                     }
-    
-                         if (accept) {
-                             inputView.addToStroke(event, pointerId, id)
-                             
-                             val velocityPxSec = if (dt > 0) (dist / dt) * 1000f else 0f
-                             
-                             totalAcceptedDistance += dist.toFloat()
-                             acceptedPointCount++
-                             
-                             debugPoints.add(DebugPoint(currentX, currentY, velocityPxSec, PointType.ACCEPTED))
-    
-                             prevAcceptedX = lastAcceptedX
-                             prevAcceptedY = lastAcceptedY
-                             
-                             lastAcceptedX = currentX
-                             lastAcceptedY = currentY
-                             lastAcceptedTime = currentTime
-                             lastAcceptedPressure = currentPressure
-                         }
-                    } catch (e: Exception) {
-                        // Ignore
+                            if (tryAcceptPoint(smoothX, smoothY, ht, smoothP)) {
+                                anyPointAccepted = true
+                            }
+                        }
+                        
+                        // B) Process Current Point
+                        applySmoothing(event.x, event.y, event.pressure)
+                        if (tryAcceptPoint(smoothX, smoothY, event.eventTime, smoothP)) {
+                             anyPointAccepted = true
+                        }
+                    } else {
+                        // Fallback logic
+                        applySmoothing(event.x, event.y, event.pressure)
+                        if (tryAcceptPoint(smoothX, smoothY, event.eventTime, smoothP)) {
+                             anyPointAccepted = true
+                        }
                     }
+
+                    // C) Visual Update
+                    // Only send to renderer if our filter liked something in this packet.
+                    if (anyPointAccepted) {
+                        inputView.addToStroke(event, pointerId, id)
+                    }
+                } catch (e: Exception) {
+                    // Ignore
+                }
                 return true
             }
             MotionEvent.ACTION_UP -> {
@@ -383,7 +450,7 @@ class InkStrokeAuthor(context: Context) : FrameLayout(context) {
             family = StockBrushes.pressurePenV1,
             colorIntArgb = android.graphics.Color.BLACK,
             size = 5f,
-            epsilon = 0.01f
+            epsilon = 0.05f
         )
     }
 
